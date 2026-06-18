@@ -13,6 +13,9 @@ SAMPLE_RATE_OUT = 24000   # edge-tts
 
 LANG = os.getenv("CALL_LANG", "en")
 
+# Nome/persona do assistente (aparece no painel e na saudacao).
+NAME = os.getenv("CALL_NAME", "Claudinho")
+
 # Voz default por idioma (edge-tts). Sobrescreva com CALL_VOICE.
 _DEFAULT_VOICE = {
     "en": "en-US-AndrewNeural",
@@ -40,14 +43,18 @@ VOICE_RATE = os.getenv("CALL_VOICE_RATE", "+0%")
 
 # Saudacao inicial por idioma
 _GREETING = {
-    "en": "Hey, I'm here. What's up?",
-    "pt": "Opa, tô na linha. Pode falar.",
-    "es": "Hola, estoy aquí. Dime.",
+    "en": f"Hey, it's {NAME}. What's up?",
+    "pt": f"Oi, aqui é o {NAME}. Pode falar.",
+    "es": f"Hola, soy {NAME}. Dime.",
 }
 GREETING = os.getenv("CALL_GREETING") or _GREETING.get(LANG[:2], _GREETING["en"])
 
 # Cerebro (Claude Code). Vazio = herda o modelo padrao do seu Claude Code.
 MODEL = os.getenv("CALL_MODEL") or None
+EFFORT = os.getenv("CALL_EFFORT") or None             # low|medium|high|xhigh — voz: medium (rapido)
+# Quando for PROGRAMAR (alterar codigo), troca pra um modelo/effort mais fortes.
+CODE_MODEL = os.getenv("CALL_CODE_MODEL", "opus")     # default Opus 4.8 (alias 'opus')
+CODE_EFFORT = os.getenv("CALL_CODE_EFFORT", "xhigh")
 # Permissoes do agente headless. Hands-free precisa nao travar em prompt.
 # ATENCAO: skip-permissions deixa o agente rodar tools/bash sem perguntar. Veja o README.
 PERMISSION = os.getenv("CALL_PERMISSION", "--dangerously-skip-permissions")
@@ -57,15 +64,54 @@ CONTINUE = os.getenv("CALL_CONTINUE", "1") not in ("0", "false", "no")
 SESSION_ID = os.getenv("CALL_SESSION_ID") or None
 CWD = os.getenv("CALL_CWD") or os.getcwd()
 
-# Ativacao: vazio = mic aberto (modo call). Preencha pra exigir wake word.
-WAKE = [w for w in os.getenv("CALL_WAKE", "").split(",") if w.strip()]
+# Ativacao por wake word. DEFAULT: precisa dizer "claudinha" pra ele ouvir/executar — sem
+# o wake, nao transcreve/executa (so loga gated). Desabilita (mic sempre aberto, modo call)
+# com CALL_WAKE=off (ou vazio/none/0). Multiplos: "claudinha,claudina".
+_WAKE_RAW = os.getenv("CALL_WAKE", "claudinha")
+WAKE = ([] if _WAKE_RAW.strip().lower() in ("", "off", "none", "0", "false", "no")
+        else [w.strip().lower() for w in _WAKE_RAW.split(",") if w.strip()])
 ACTIVE_WINDOW = float(os.getenv("CALL_ACTIVE_WINDOW", "25"))
+
+# Watchdog do turno: se o cérebro travar, recomeça sozinho (respawn FRESH) em vez de ficar
+# preso em "pensando". FIRST_RESP = s sem NENHUMA resposta (resume pesado/daemon morto).
+# TURN = s travado depois de já ter respondido (tool/stall longo; acima do timeout do Bash).
+FIRST_RESP_TIMEOUT = float(os.getenv("CALL_FIRST_RESP_TIMEOUT", "75"))
+TURN_TIMEOUT = float(os.getenv("CALL_TURN_TIMEOUT", "120"))
 
 # Anti-eco
 ECHO_GATE = os.getenv("CALL_ECHO_GATE", "1") not in ("0", "false", "no")
+ECHO_TAIL = float(os.getenv("CALL_ECHO_TAIL", "0.8"))  # segs que o mic fica mudo APOS ela falar
 AEC = os.getenv("CALL_AEC", "0") not in ("0", "false", "no")
 
-# STT (whisper.cpp)
+# VAD (deteccao de fala). min_volume MENOR = capta tua fala real (o mic do MacBook é
+# baixo; com 0.6 o VAD rejeitava e nao transcrevia mesmo a wave mexendo). stop_secs MAIOR
+# = espera vc TERMINAR (com 0.2 ela cortava no meio). Ajustavel ao vivo (+/-) e por env.
+VAD_CONFIDENCE = float(os.getenv("CALL_VAD_CONFIDENCE", "0.5"))  # menor = ouve melhor (nivel 2)
+VAD_START_SECS = float(os.getenv("CALL_VAD_START_SECS", "0.2"))  # "filtro de ruido": maior ignora blip curto
+VAD_STOP_SECS = float(os.getenv("CALL_VAD_STOP_SECS", "1.0"))    # espera vc TERMINAR (anti-atropelo)
+VAD_MIN_VOLUME = float(os.getenv("CALL_VAD_MIN_VOLUME", "0.2"))
+
+# Dispositivo de entrada (mic) por NOME (os índices do pyaudio mudam quando conecta/desconecta
+# device — por isso nunca por índice). Vazio = mic do computador.
+INPUT_DEVICE_NAME = (os.getenv("CALL_INPUT_DEVICE") or "").strip() or None
+
+# Feedback visual: painel ao vivo no terminal (ouvido/fazendo/resposta) + janela
+# "Claude Code ao vivo" sob comando de voz. Auto-desliga sem TTY (ex.: background).
+UI = os.getenv("CALL_UI", "1") not in ("0", "false", "no")
+
+# Hotkey GLOBAL (sem foco no terminal): segura a tecla N segundos -> muta/desmuta.
+# off/none/0/vazio = desliga e NAO importa pynput (~22MB de RAM a menos). O M no terminal
+# continua mutando — só perde o atalho sem foco. Default f9.
+_HOTKEY_RAW = os.getenv("CALL_HOTKEY", "f9").strip()
+HOTKEY = None if _HOTKEY_RAW.lower() in ("", "off", "none", "0", "false", "no") else _HOTKEY_RAW
+HOTKEY_SECS = float(os.getenv("CALL_HOTKEY_SECS", "3"))
+
+# STT provider: local (whisper.cpp, gratis) | elevenlabs | groq | openai
+STT = os.getenv("CALL_STT", "local").lower()
+STT_API_KEY = os.getenv("CALL_STT_API_KEY") or None
+STT_MODEL = os.getenv("CALL_STT_MODEL") or None
+
+# STT local (whisper.cpp)
 WHISPER_MODEL = os.path.expanduser(os.getenv(
     "CALL_WHISPER_MODEL", str(Path.home() / ".cache" / "whisper" / "ggml-small.bin")
 ))
@@ -93,12 +139,15 @@ _VOICE_RULES = {
         "GOLDEN RULE: when in doubt, SIMPLIFY. Fewer words, more human."
     ),
     "pt": (
-        "Voce esta numa LIGACAO de voz, em tempo real — nao esta codando nem escrevendo "
-        "relatorio. Fale como gente numa call: solto, caloroso, informal, contraido (to, pra, "
-        "ce, ta, ne). Curto, 1 a 2 frases, do jeito que sai na conversa. "
-        "NAO narre o que esta fazendo por dentro ('vou editar', 'rodando o comando'). So "
-        "entrega o resultado, natural. NUNCA leia markdown, listas, codigo, URLs, caminhos, "
-        "IDs ou numeros longos. Sem bordao de assistente. Na duvida, SIMPLIFIQUE."
+        "Voce ta numa ligacao de voz. Fale brasileiro mesmo: to, ta, ne, ce, pra, pro, numa. "
+        "MAXIMO 1-2 frases curtas. So a CONCLUSAO, direto ao ponto: o que era, se resolveu, "
+        "o que voce fez. Ex.: 'resolvido, era o timeout, ja arrumei' / 'nao era bug de "
+        "controle, era cache; ajustei'. "
+        "NUNCA fale nome de arquivo, caminho, codigo, URL, comando, lista nem numero longo. "
+        "Se precisar apontar algo, diz o nome da SESSAO ou da tarefa, nunca o arquivo. "
+        "Nao narre passo a passo o que ta fazendo — so o resultado final. "
+        "Se nao sabe ainda, fala 'perai'. Nada de 'claro!', 'certamente!', 'entendido!'. "
+        "REGRA DE OURO: menos e mais. Direto."
     ),
 }
 VOICE_RULES = os.getenv("CALL_SYSTEM") or _VOICE_RULES.get(LANG[:2], _VOICE_RULES["en"])

@@ -14,13 +14,17 @@ from loguru import logger
 from pipecat.frames.frames import (
     ErrorFrame, Frame, TTSAudioRawFrame, TTSStartedFrame, TTSStoppedFrame,
 )
+from pipecat.services.settings import TTSSettings
 from pipecat.services.tts_service import TTSService
 
 
 class EdgeTTS(TTSService):
     def __init__(self, *, voice: str, rate: str = "+0%", pitch: str = "+0Hz",
                  sample_rate: int = 24000, **kwargs):
-        super().__init__(sample_rate=sample_rate, **kwargs)
+        # Inicializa os campos de settings (senao Pipecat loga ERROR de NOT_GIVEN).
+        super().__init__(sample_rate=sample_rate,
+                         settings=TTSSettings(model=None, voice=voice, language=None),
+                         **kwargs)
         self._voice, self._rate, self._pitch = voice, rate, pitch
 
     def can_generate_metrics(self) -> bool:
